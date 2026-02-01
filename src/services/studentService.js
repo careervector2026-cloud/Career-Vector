@@ -13,14 +13,17 @@ redisClient.connect().catch(console.error);
 // Email Transporter (Gmail)
 const transporter = nodemailer.createTransport({
     host: process.env.MAIL_HOST,
-    port: 465,
-    secure: true,
+    port: 587,            // <--- Change to 587
+    secure: false,        // <--- Change to false (Upgrade later with STARTTLS)
     auth: {
         user: process.env.MAIL_USER,
         pass: process.env.MAIL_PASS
+    },
+    // Add this specifically for debugging/cloud issues
+    tls: {
+        rejectUnauthorized: false
     }
 });
-
 // Helper: Send Email
 const sendEmailOtp = async (email, messagePrefix) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();

@@ -23,13 +23,19 @@ redisClient.on('error', (err) => console.error('DEBUG: [Recruiter] Redis Error',
 
 // --- 2. Email Setup ---
 const transporter = nodemailer.createTransport({
-    service: 'gmail', // <--- FIX: Uses Google's default settings automatically
+    host: process.env.MAIL_HOST,  // Force Gmail Host
+    port: 587,               // Force Port 587 (STARTTLS)
+    secure: false,           // Must be false for port 587
     auth: {
         user: process.env.MAIL_USER,
         pass: process.env.MAIL_PASS
     },
-    debug: true, // Keep logs enabled
-    logger: true // Keep logs enabled
+    tls: {
+        rejectUnauthorized: false // Helps with cloud SSL handshake
+    },
+    family: 4,               // <--- CRITICAL FIX: Forces IPv4 to prevent timeouts
+    debug: true,
+    logger: true
 });
 // --- 3. Helper: Send Email OTP ---
 const sendEmailOtp = async (email, messagePrefix) => {

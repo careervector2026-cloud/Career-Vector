@@ -1,3 +1,7 @@
+import dns from 'dns';
+// CRITICAL FIX: Force IPv4 to prevent Render/Gmail timeouts
+dns.setDefaultResultOrder('ipv4first');
+
 import Student from '../models/Student.js';
 import { createClient } from 'redis';
 import nodemailer from 'nodemailer';
@@ -20,31 +24,23 @@ redisClient.on('error', (err) => console.error('DEBUG: Redis Client Error', err)
     }
 })();
 
-// --- 2. Email Transporter Setup ---
+// --- 2. Email Transporter Setup (Final Fix) ---
 const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",  // Force Gmail Host
-    port: 587,               // Force Port 587 (STARTTLS)
-    secure: false,           // Must be false for port 587
+    service: 'gmail', // Automatically handles the correct ports/security
     auth: {
         user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS
-    },
-    tls: {
-        rejectUnauthorized: false // Helps with cloud SSL handshake
-    },
-    family: 4,               // <--- CRITICAL FIX: Forces IPv4 to prevent timeouts
-    debug: true,
-    logger: true
+        // .replace removes spaces if you copied them from Google (e.g. "abcd efgh" -> "abcdefgh")
+        pass: process.env.MAIL_PASS ? process.env.MAIL_PASS.replace(/\s+/g, '') : ''
+    }
 });
+
 // --- 3. Helper: Send Email with Debug Logs ---
 const sendEmailOtp = async (email, messagePrefix) => {
     console.log(`DEBUG: Starting OTP Process for ${email}`);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    console.log(`DEBUG: Generated OTP: ${otp}`);
 
     try {
         // Save to Redis (5 minutes)
-        console.log('DEBUG: Saving OTP to Redis...');
         await redisClient.setEx(email, 300, otp);
         console.log('DEBUG: OTP saved to Redis successfully.');
     } catch (redisError) {
@@ -60,8 +56,7 @@ const sendEmailOtp = async (email, messagePrefix) => {
             subject: "CareerVector Verification Code",
             text: `${messagePrefix}${otp}\n\nThis code expires in 5 minutes`
         });
-        console.log('DEBUG: Email sent successfully. Message ID:', info.messageId);
-        console.log('DEBUG: Server Response:', info.response);
+        console.log('DEBUG: Email sent successfully. Response:', info.response);
     } catch (emailError) {
         console.error('DEBUG: Failed to send email:', emailError);
         throw new Error(`Email Service Error: ${emailError.message}`);
@@ -93,15 +88,11 @@ export const studentService = {
 
     // 3. Verify OTP
     verifyOtp: async (email, otpInput) => {
-        console.log(`DEBUG: Verifying OTP for ${email}. Input: ${otpInput}`);
         const storedOtp = await redisClient.get(email);
-        console.log(`DEBUG: Stored OTP in Redis is: ${storedOtp}`);
-
         if (storedOtp && storedOtp === otpInput) {
             await redisClient.del(email);
             return true;
         }
-        console.log('DEBUG: OTP mismatch or expired.');
         return false;
     },
 
@@ -121,7 +112,6 @@ export const studentService = {
 
     // 5. Save Student (Signup Logic)
     saveStudent: async (data, files) => {
-        console.log(`DEBUG: Saving new student: ${data.email}`);
         const {
             roll, fullName, email, password, username, dept, branch,
             mobile, sem, year, semesterGPAs, leetcode, github
@@ -134,19 +124,17 @@ export const studentService = {
         let resumeUrl = null;
 
         if (files.profilePic) {
-            console.log('DEBUG: Uploading Profile Pic...');
             const file = files.profilePic[0];
             const name = `${roll}_avatar_${Date.now()}.png`;
             profileImageUrl = await uploadFileToSupabase(file.buffer, file.mimetype, 'images', name);
         }
         if (files.resume) {
-            console.log('DEBUG: Uploading Resume...');
             const file = files.resume[0];
             const name = `${roll}_resume_${Date.now()}.pdf`;
             resumeUrl = await uploadFileToSupabase(file.buffer, file.mimetype, 'resumes', name);
         }
 
-        // Parse GPAs from JSON string
+        // Parse GPAs
         let gpas = {};
         if (semesterGPAs) {
             try {
@@ -165,7 +153,7 @@ export const studentService = {
         }
 
         // Create Record
-        const student = await Student.create({
+        return await Student.create({
             rollNumber: roll,
             fullName,
             email,
@@ -176,14 +164,12 @@ export const studentService = {
             mobileNumber: mobile,
             semester: parseInt(sem),
             year: parseInt(year),
-            ...gpas, // Spread parsed GPAs into fields
+            ...gpas,
             profileImageUrl,
             resumeUrl,
             leetcodeurl: leetcode,
             githubUrl: github,
             verified: true
         });
-        console.log(`DEBUG: Student saved successfully: ${student.id}`);
-        return student;
     }
 };

@@ -1,3 +1,7 @@
+import dns from 'dns';
+// CRITICAL FIX: Force IPv4 to prevent Render/Gmail timeouts
+dns.setDefaultResultOrder('ipv4first');
+
 import Recruiter from '../models/Recruiter.js';
 import { createClient } from 'redis';
 import nodemailer from 'nodemailer';
@@ -21,30 +25,22 @@ redisClient.on('error', (err) => console.error('DEBUG: [Recruiter] Redis Error',
     }
 })();
 
-// --- 2. Email Setup ---
+// --- 2. Email Setup (Final Fix) ---
 const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",  // Force Gmail Host
-    port: 587,               // Force Port 587 (STARTTLS)
-    secure: false,           // Must be false for port 587
+    service: 'gmail', // Automatically handles the correct ports/security
     auth: {
         user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS
-    },
-    tls: {
-        rejectUnauthorized: false // Helps with cloud SSL handshake
-    },
-    family: 4,               // <--- CRITICAL FIX: Forces IPv4 to prevent timeouts
-    debug: true,
-    logger: true
+        // .replace removes spaces if you copied them from Google
+        pass: process.env.MAIL_PASS ? process.env.MAIL_PASS.replace(/\s+/g, '') : ''
+    }
 });
+
 // --- 3. Helper: Send Email OTP ---
 const sendEmailOtp = async (email, messagePrefix) => {
     console.log(`DEBUG: [Recruiter] Starting OTP Process for ${email}`);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    console.log(`DEBUG: [Recruiter] Generated OTP: ${otp}`);
 
     try {
-        console.log('DEBUG: [Recruiter] Saving to Redis...');
         await redisClient.setEx(email, 300, otp);
         console.log('DEBUG: [Recruiter] Saved to Redis.');
     } catch (err) {
@@ -70,32 +66,21 @@ const sendEmailOtp = async (email, messagePrefix) => {
 export const recruiterService = {
     // 1. Generate OTP (Signup)
     generateAndSendOtp: async (email) => {
-        console.log(`DEBUG: [Recruiter] Checking if exists: ${email}`);
         const exists = await Recruiter.findOne({ where: { email } });
-        if (exists) {
-            console.log('DEBUG: [Recruiter] User exists.');
-            throw new Error("Email is already registered. Please login.");
-        }
+        if (exists) throw new Error("Email is already registered. Please login.");
         await sendEmailOtp(email, "Welcome Recruiter! Your verification code is: ");
     },
 
     // 2. Generate OTP (Forgot Password)
     generateAndSendOtpForReset: async (email) => {
-        console.log(`DEBUG: [Recruiter] Checking for reset: ${email}`);
         const exists = await Recruiter.findOne({ where: { email } });
-        if (!exists) {
-            console.log('DEBUG: [Recruiter] User not found.');
-            throw new Error("Email not found. Please register first.");
-        }
+        if (!exists) throw new Error("Email not found. Please register first.");
         await sendEmailOtp(email, "Password Reset Request. Your verification code is: ");
     },
 
     // 3. Verify OTP
     verifyOtp: async (email, otpInput) => {
-        console.log(`DEBUG: [Recruiter] Verifying OTP for ${email}`);
         const storedOtp = await redisClient.get(email);
-        console.log(`DEBUG: [Recruiter] Stored OTP: ${storedOtp}`);
-
         if (storedOtp && storedOtp === otpInput) {
             await redisClient.del(email);
             return true;
@@ -114,7 +99,6 @@ export const recruiterService = {
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         recruiter.password = hashedPassword;
         await recruiter.save();
-        console.log(`DEBUG: [Recruiter] Password reset success.`);
     },
 
     // 5. Find User (Login)
@@ -129,20 +113,18 @@ export const recruiterService = {
 
     // 6. Save Recruiter (Signup)
     save: async (data, file) => {
-        console.log(`DEBUG: [Recruiter] Saving new user.`);
         const { email, fullName, username, mobile, companyName, role, password } = data;
 
         const hashedPassword = await bcrypt.hash(password, 10);
         let imageUrl = null;
 
         if (file) {
-            console.log('DEBUG: [Recruiter] Uploading image...');
             const safeUserName = username || "recruiter";
             const fileName = `${safeUserName}_avatar_${Date.now()}.png`;
             imageUrl = await uploadFileToSupabase(file.buffer, file.mimetype, 'recruiter-images', fileName);
         }
 
-        const recruiter = await Recruiter.create({
+        return await Recruiter.create({
             email,
             fullName,
             userName: username,
@@ -153,7 +135,5 @@ export const recruiterService = {
             imageUrl,
             verified: true
         });
-        console.log(`DEBUG: [Recruiter] Saved success.`);
-        return recruiter;
     }
 };

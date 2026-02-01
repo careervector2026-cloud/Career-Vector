@@ -22,20 +22,14 @@ redisClient.on('error', (err) => console.error('DEBUG: Redis Client Error', err)
 
 // --- 2. Email Transporter Setup ---
 const transporter = nodemailer.createTransport({
-    host: process.env.MAIL_HOST,
-    port: 587,             // Using 587 for Cloud compatibility
-    secure: false,         // false for 587 (uses STARTTLS)
+    service: 'gmail', // <--- FIX: Uses Google's default settings automatically
     auth: {
         user: process.env.MAIL_USER,
         pass: process.env.MAIL_PASS
     },
-    tls: {
-        rejectUnauthorized: false
-    },
-    debug: true,           // Print verbose nodemailer logs
-    logger: true           // Log info to console
+    debug: true, // Keep logs enabled
+    logger: true // Keep logs enabled
 });
-
 // --- 3. Helper: Send Email with Debug Logs ---
 const sendEmailOtp = async (email, messagePrefix) => {
     console.log(`DEBUG: Starting OTP Process for ${email}`);

@@ -1,10 +1,5 @@
-import dns from 'dns';
-// CRITICAL FIX: Force IPv4 to prevent Render/Gmail timeouts
-dns.setDefaultResultOrder('ipv4first');
-
 import Student from '../models/Student.js';
 import { createClient } from 'redis';
-import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import { uploadFileToSupabase } from '../utils/storage.js';
 import dotenv from 'dotenv';
@@ -24,42 +19,48 @@ redisClient.on('error', (err) => console.error('DEBUG: Redis Client Error', err)
     }
 })();
 
-// --- 2. Email Transporter Setup (Final Fix) ---
-const transporter = nodemailer.createTransport({
-    service: 'gmail', // Automatically handles the correct ports/security
-    auth: {
-        user: process.env.MAIL_USER,
-        // .replace removes spaces if you copied them from Google (e.g. "abcd efgh" -> "abcdefgh")
-        pass: process.env.MAIL_PASS ? process.env.MAIL_PASS.replace(/\s+/g, '') : ''
-    }
-});
-
-// --- 3. Helper: Send Email with Debug Logs ---
+// --- 2. Helper: Send Email via Brevo API (HTTPS) ---
 const sendEmailOtp = async (email, messagePrefix) => {
     console.log(`DEBUG: Starting OTP Process for ${email}`);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    console.log(`DEBUG: Generated OTP: ${otp}`);
 
     try {
         // Save to Redis (5 minutes)
         await redisClient.setEx(email, 300, otp);
         console.log('DEBUG: OTP saved to Redis successfully.');
-    } catch (redisError) {
-        console.error('DEBUG: Failed to save to Redis:', redisError);
-        throw new Error('Internal Server Error: Redis failed');
-    }
 
-    try {
-        console.log('DEBUG: Attempting to send email...');
-        const info = await transporter.sendMail({
-            from: process.env.MAIL_USER,
-            to: email,
-            subject: "CareerVector Verification Code",
-            text: `${messagePrefix}${otp}\n\nThis code expires in 5 minutes`
+        // Send via Brevo API
+        console.log('DEBUG: Sending email via Brevo API...');
+
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+                'accept': 'application/json',
+                'api-key': process.env.BREVO_API_KEY, // Make sure this is set in Render
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                sender: {
+                    name: 'CareerVector',
+                    email: 'careervector2026@gmail.com' // Your verified sender
+                },
+                to: [{ email: email }],
+                subject: 'CareerVector Verification Code',
+                textContent: `${messagePrefix}${otp}\n\nThis code expires in 5 minutes`
+            })
         });
-        console.log('DEBUG: Email sent successfully. Response:', info.response);
-    } catch (emailError) {
-        console.error('DEBUG: Failed to send email:', emailError);
-        throw new Error(`Email Service Error: ${emailError.message}`);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Brevo API Error: ${errorText}`);
+        }
+
+        console.log('DEBUG: Email sent successfully via Brevo');
+
+    } catch (error) {
+        console.error('DEBUG: Email Failed:', error);
+        throw new Error(`Email Service Error: ${error.message}`);
     }
 };
 
@@ -88,11 +89,15 @@ export const studentService = {
 
     // 3. Verify OTP
     verifyOtp: async (email, otpInput) => {
+        console.log(`DEBUG: Verifying OTP for ${email}. Input: ${otpInput}`);
         const storedOtp = await redisClient.get(email);
+        console.log(`DEBUG: Stored OTP in Redis is: ${storedOtp}`);
+
         if (storedOtp && storedOtp === otpInput) {
             await redisClient.del(email);
             return true;
         }
+        console.log('DEBUG: OTP mismatch or expired.');
         return false;
     },
 
@@ -112,6 +117,7 @@ export const studentService = {
 
     // 5. Save Student (Signup Logic)
     saveStudent: async (data, files) => {
+        console.log(`DEBUG: Saving new student: ${data.email}`);
         const {
             roll, fullName, email, password, username, dept, branch,
             mobile, sem, year, semesterGPAs, leetcode, github
@@ -124,11 +130,13 @@ export const studentService = {
         let resumeUrl = null;
 
         if (files.profilePic) {
+            console.log('DEBUG: Uploading Profile Pic...');
             const file = files.profilePic[0];
             const name = `${roll}_avatar_${Date.now()}.png`;
             profileImageUrl = await uploadFileToSupabase(file.buffer, file.mimetype, 'images', name);
         }
         if (files.resume) {
+            console.log('DEBUG: Uploading Resume...');
             const file = files.resume[0];
             const name = `${roll}_resume_${Date.now()}.pdf`;
             resumeUrl = await uploadFileToSupabase(file.buffer, file.mimetype, 'resumes', name);
@@ -153,7 +161,7 @@ export const studentService = {
         }
 
         // Create Record
-        return await Student.create({
+        const student = await Student.create({
             rollNumber: roll,
             fullName,
             email,
@@ -171,5 +179,7 @@ export const studentService = {
             githubUrl: github,
             verified: true
         });
+        console.log(`DEBUG: Student saved successfully: ${student.id}`);
+        return student;
     }
 };

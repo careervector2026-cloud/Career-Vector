@@ -22,7 +22,7 @@ redisClient.on('error', (err) => console.error('DEBUG: Redis Client Error', err)
 
 // --- 2. Email Transporter Setup ---
 const transporter = nodemailer.createTransport({
-    host: process.env.MAIL_HOST,  // Force Gmail Host
+    host: "smtp.gmail.com",  // Force Gmail Host
     port: 587,               // Force Port 587 (STARTTLS)
     secure: false,           // Must be false for port 587
     auth: {

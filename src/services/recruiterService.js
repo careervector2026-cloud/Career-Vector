@@ -13,7 +13,7 @@ redisClient.connect().catch(console.error);
 
 // Email Setup
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
+    host: process.env.MAIL_HOST,
     port: 465,
     secure: true,
     auth: {
